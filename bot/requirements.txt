@@ -1,0 +1,9 @@
+python-telegram-bot==20.0
+python-dotenv
+google-generativeai
+gspread
+oauth2client
+
+
+pip install python-telegram-bot==20.0 google-generativeai python-dotenv
+
