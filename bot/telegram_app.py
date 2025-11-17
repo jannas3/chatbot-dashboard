@@ -46,9 +46,13 @@ GREETINGS = {
 }
 
 CRISIS_MESSAGE = (
-    "⚠️ Sua segurança é prioridade.\n"
-    "Se houver risco imediato, ligue 188 (CVV) ou 192 (SAMU) agora.\n"
-    "Vou sinalizar sua mensagem para a equipe."
+    "Sinto muito saber que você está passando por um momento tão difícil. 💙\n"
+    "Sua segurança é prioridade.\n"
+    "Se você estiver em risco agora, procure ajuda imediata:\n"
+    "• CVV 188\n"
+    "• SAMU 192\n"
+    "• Pronto-socorro mais próximo.\n"
+    "Se você quiser, posso continuar a triagem com você."
 )
 
 SCALE_INTRO = (
@@ -61,6 +65,7 @@ SCALE_KEYBOARD = ReplyKeyboardMarkup([["0", "1", "2", "3"]], one_time_keyboard=T
 PERSONAL_FIELDS = [
     ("nome", "Qual seu nome completo?"),
     ("idade", "Qual sua idade?"),
+    ("telefone", "Qual seu número de telefone para contato? (ex: 92999999999 ou +5592999999999)"),
     ("matricula", "Informe sua matrícula."),
     ("curso", "Qual o seu curso?"),
     ("periodo", "Qual o período/semestre atual?"),
@@ -166,13 +171,13 @@ async def start(update: Update, context: CallbackContext) -> ConversationState:
     session = _get_session(context, user.id)
     _reset_session(session)
 
-    menu_keyboard = ReplyKeyboardMarkup(
-        [["🩺 Triagem + Agendamento"], ["ℹ️ Informações"]],
-        resize_keyboard=True,
+    menu_keyboard = ReplyKeyboardMarkup([["Sim, vamos começar"], ["Agora não"], ["ℹ️ Informações"]], resize_keyboard=True)
+    await update.message.reply_text(
+        "Oi! 💙 Sou o assistente de saúde mental do IFAM-CMZL.\nPosso te ajudar com uma triagem rápida para organizar seu atendimento com o psicólogo.",
+        reply_markup=menu_keyboard,
     )
     await update.message.reply_text(
-        "🧠 Olá! Sou o Assistente de Saúde Mental do IFAM CMZL.\nComo posso ajudar?",
-        reply_markup=menu_keyboard,
+        "Essa triagem não é diagnóstico. Ela só ajuda a equipe a entender como você está e organizar o atendimento presencial.\n\nVocê deseja continuar?"
     )
     logger.info("session_start", extra={"event": "session_start", "user_id": user.id})
     return ConversationState.MENU
@@ -183,6 +188,24 @@ async def menu(update: Update, context: CallbackContext) -> ConversationState:
         return ConversationHandler.END
     text = (update.message.text or "").strip()
     normalized = text.lower().strip().strip("!?.")
+    if normalized in {"sim", "vamos", "vamos comecar", "vamos começar", "quero", "topo", "sim, vamos começar", "sim vamos começar", "sim vamos", "sim, vamos"} or text == "🩺 Triagem + Agendamento" or text == "Sim, vamos começar":
+        session = _get_session(context, update.effective_user.id)
+        _reset_session(session)
+        session.triage_active = True
+        field = session.next_personal_field()
+        await update.message.reply_text(
+            "Perfeito, obrigado por aceitar. 🙏\nVamos começar com alguns dados rápidos para organizar seu atendimento.",
+            reply_markup=ReplyKeyboardRemove(),
+        )
+        if field:
+            await update.message.reply_text(field[1])
+        return ConversationState.DADOS
+    if normalized in {"nao", "não", "agora nao", "agora não"} or text == "Agora não":
+        await update.message.reply_text(
+            "Tudo bem. Obrigado por conversar comigo. 💙 Se quiser retomar depois, é só mandar “/start”.",
+            reply_markup=ReplyKeyboardRemove(),
+        )
+        return ConversationHandler.END
     if normalized in GREETINGS:
         session = _get_session(context, update.effective_user.id)
         if session.triage_active:
@@ -201,13 +224,13 @@ async def menu(update: Update, context: CallbackContext) -> ConversationState:
             elif inferred == ConversationState.PHQ9:
                 idx = len(session.phq9_answers)
                 await update.message.reply_text(
-                    SCALE_INTRO + PHQ9_QUESTIONS[idx],
+                    f"{idx+1}️⃣ {PHQ9_QUESTIONS[idx]} (0–3)",
                     reply_markup=SCALE_KEYBOARD,
                 )
             elif inferred == ConversationState.GAD7:
                 idx = len(session.gad7_answers)
                 await update.message.reply_text(
-                    SCALE_INTRO + GAD7_QUESTIONS[idx],
+                    f"{idx+1}️⃣ {GAD7_QUESTIONS[idx]} (0–3)",
                     reply_markup=SCALE_KEYBOARD,
                 )
             else:
@@ -242,7 +265,7 @@ async def menu(update: Update, context: CallbackContext) -> ConversationState:
         )
         return ConversationHandler.END
     await update.message.reply_text(
-        "Para iniciar a triagem, escolha 🩺 Triagem + Agendamento ou envie uma saudação como “oi”."
+        "Para iniciar a triagem, responda “Sim, vamos começar” ou envie uma saudação como “oi”."
     )
     return ConversationState.MENU
 
@@ -258,7 +281,127 @@ async def collect_personal_data(update: Update, context: CallbackContext) -> Con
     if field is None:
         return await proceed_to_conversation(update, session)
     key, _question = field
+    
+    import re
+    
+    # Validação específica para nome (apenas letras e espaços)
+    if key == "nome":
+        nome = re.sub(r"\s+", " ", text).strip()
+        if (
+            not nome
+            or len(nome) < 3
+            or not re.fullmatch(r"[A-Za-zÀ-ÖØ-öø-ÿ' -]+", nome)
+        ):
+            await update.message.reply_text(
+                "Por favor, informe apenas seu nome completo usando letras e espaços. Exemplo: Maria Silva."
+            )
+            return ConversationState.DADOS
+        session.personal_data[key] = nome
+        session.triage_active = True
+        field = session.next_personal_field()
+        if field is None:
+            return await proceed_to_conversation(update, session)
+        await update.message.reply_text(field[1])
+        return ConversationState.DADOS
+    
+    # Validação específica para idade (10-100)
+    if key == "idade":
+        try:
+            idade_num = int(text)
+            if idade_num < 10 or idade_num > 100:
+                await update.message.reply_text("Por favor, informe sua idade apenas com números. Exemplo: 22.")
+                return ConversationState.DADOS
+            session.personal_data[key] = str(idade_num)
+        except ValueError:
+            await update.message.reply_text("Por favor, informe sua idade apenas com números. Exemplo: 22.")
+            return ConversationState.DADOS
+        session.triage_active = True
+        field = session.next_personal_field()
+        if field is None:
+            return await proceed_to_conversation(update, session)
+        await update.message.reply_text(field[1])
+        return ConversationState.DADOS
+    
+    # Validação específica para telefone (11-13 dígitos, formato: 92999999999 ou +5592999999999)
+    if key == "telefone":
+        # Remove espaços, hífens, parênteses
+        telefone_limpo = text.replace(" ", "").replace("-", "").replace("(", "").replace(")", "")
+        
+        # Verifica se começa com +55 ou +
+        if telefone_limpo.startswith("+55"):
+            digitos = re.sub(r'[^\d]', '', telefone_limpo[3:])  # Remove +55 e mantém só dígitos
+            telefone_final = "+55" + digitos
+        elif telefone_limpo.startswith("+"):
+            digitos = re.sub(r'[^\d]', '', telefone_limpo[1:])  # Remove + e mantém só dígitos
+            telefone_final = "+" + digitos
+        else:
+            digitos = re.sub(r'[^\d]', '', telefone_limpo)  # Apenas dígitos
+            telefone_final = digitos
+        
+        # Valida quantidade de dígitos (11-13 dígitos totais)
+        total_digitos = len(re.sub(r'[^\d]', '', telefone_final))
+        if total_digitos < 11 or total_digitos > 13:
+            await update.message.reply_text("Informe um telefone válido no formato: 92999999999 ou +5592999999999.")
+            return ConversationState.DADOS
+        
+        session.personal_data[key] = telefone_final
+        session.triage_active = True
+        field = session.next_personal_field()
+        if field is None:
+            return await proceed_to_conversation(update, session)
+        await update.message.reply_text(field[1])
+        return ConversationState.DADOS
+    
+    # Validação específica para matrícula (6-15 dígitos, apenas números)
+    if key == "matricula":
+        # Remove espaços e caracteres não numéricos
+        matricula_limpa = re.sub(r'[^\d]', '', text)
+        if len(matricula_limpa) < 6 or len(matricula_limpa) > 15:
+            await update.message.reply_text("Por favor, informe apenas os números da matrícula.")
+            return ConversationState.DADOS
+        session.personal_data[key] = matricula_limpa
+        session.triage_active = True
+        field = session.next_personal_field()
+        if field is None:
+            return await proceed_to_conversation(update, session)
+        await update.message.reply_text(field[1])
+        return ConversationState.DADOS
+    
+    # Validação específica para curso (apenas letras e espaços)
+    if key == "curso":
+        curso = re.sub(r"\s+", " ", text).strip()
+        if not curso or not re.fullmatch(r"[A-Za-zÀ-ÖØ-öø-ÿ' -]+", curso):
+            await update.message.reply_text("Por favor, informe o nome do seu curso usando apenas letras.")
+            return ConversationState.DADOS
+        session.personal_data[key] = curso
+        session.triage_active = True
+        field = session.next_personal_field()
+        if field is None:
+            return await proceed_to_conversation(update, session)
+        await update.message.reply_text(field[1])
+        return ConversationState.DADOS
+    
+    # Validação específica para período (1-12, apenas números)
+    if key == "periodo":
+        try:
+            periodo_num = int(text)
+            if periodo_num < 1 or periodo_num > 12:
+                await update.message.reply_text("Informe apenas o período/semestre em número. Exemplo: 8.")
+                return ConversationState.DADOS
+            session.personal_data[key] = str(periodo_num)
+        except ValueError:
+            await update.message.reply_text("Informe apenas o período/semestre em número. Exemplo: 8.")
+            return ConversationState.DADOS
+        session.triage_active = True
+        field = session.next_personal_field()
+        if field is None:
+            return await proceed_to_conversation(update, session)
+        await update.message.reply_text(field[1])
+        return ConversationState.DADOS
+    
+    # Se não for nenhum campo específico, salva normalmente
     session.personal_data[key] = text
+    
     session.triage_active = True
     field = session.next_personal_field()
     if field is None:
@@ -269,16 +412,9 @@ async def collect_personal_data(update: Update, context: CallbackContext) -> Con
 
 async def proceed_to_conversation(update: Update, session: SessionData) -> ConversationState:
     if update.message:
-        await update.message.reply_text(
-            """Obrigado por compartilhar suas informações até aqui 💙
-
-Agora, se sentir confortável, me conte:
-**como você tem se sentido nos últimos dias?**
-
-Estou aqui para te ouvir.
-
-Logo após a sua mensagem, vou conduzir um questionário rápido para cuidar de você, tudo bem?"""
-        )
+        await update.message.reply_text("Perfeito, obrigado por compartilhar essas informações. 🙏")
+        await update.message.reply_text("Agora, se você se sentir à vontade, me conta com suas palavras: como você tem se sentido nos últimos dias? 💙")
+        await update.message.reply_text("Depois vou te fazer algumas perguntas rápidas. Não é diagnóstico; é para o psicólogo entender melhor como te apoiar.")
     return ConversationState.CONVERSA
 
 
@@ -310,12 +446,8 @@ async def empathetic_conversation(update: Update, context: CallbackContext) -> C
         await update.message.reply_text(chunk)
 
     if not session.phq9_started:
-        await update.message.reply_text(
-            "Para seguirmos com o cuidado, vou aplicar um questionário rápido sobre seu humor nas últimas semanas."
-        )
-        await update.message.reply_text(
-            "São 9 perguntas (PHQ-9). Responda usando os botões 0, 1, 2 ou 3 conforme a frequência."
-        )
+        await update.message.reply_text("Agora vou te fazer 9 perguntas sobre as últimas duas semanas.")
+        await update.message.reply_text("Use esta escala para responder só o número: 0 nunca, 1 vários dias, 2 mais da metade dos dias, 3 quase todos os dias. Entendeu? 🙂")
         return await start_phq9(update, session)
 
     return ConversationState.PHQ9
@@ -325,7 +457,10 @@ async def start_phq9(update: Update, session: SessionData) -> ConversationState:
     session.phq9_answers.clear()
     session.phq9_started = True
     if update.message:
-        await update.message.reply_text(SCALE_INTRO + PHQ9_QUESTIONS[0], reply_markup=SCALE_KEYBOARD)
+        await update.message.reply_text(
+            f"1️⃣ {PHQ9_QUESTIONS[0]}\n(0 — Nunca | 1 — Vários dias | 2 — Mais da metade dos dias | 3 — Quase todos os dias)",
+            reply_markup=SCALE_KEYBOARD
+        )
     return ConversationState.PHQ9
 
 
@@ -337,8 +472,8 @@ async def phq9_handler(update: Update, context: CallbackContext) -> Conversation
         await update.message.reply_text(CRISIS_MESSAGE)
         idx = len(session.phq9_answers)
         await update.message.reply_text(
-            SCALE_INTRO + PHQ9_QUESTIONS[idx],
-            reply_markup=SCALE_KEYBOARD,
+            f"{idx+1}️⃣ {PHQ9_QUESTIONS[idx]}\n(0 — Nunca | 1 — Vários dias | 2 — Mais da metade dos dias | 3 — Quase todos os dias)",
+            reply_markup=SCALE_KEYBOARD
         )
         return ConversationState.PHQ9
     session = _get_session(context, update.effective_user.id)
@@ -346,8 +481,8 @@ async def phq9_handler(update: Update, context: CallbackContext) -> Conversation
     if text not in {"0", "1", "2", "3"}:
         idx = len(session.phq9_answers)
         await update.message.reply_text(
-            "Por favor, responda com 0, 1, 2 ou 3 conforme a escala de frequência.\n\n"
-            + PHQ9_QUESTIONS[idx],
+            "Responda apenas com um número entre 0 e 3.\n\n"
+            + f"{idx+1}️⃣ {PHQ9_QUESTIONS[idx]}\n(0 — Nunca | 1 — Vários dias | 2 — Mais da metade dos dias | 3 — Quase todos os dias)",
             reply_markup=SCALE_KEYBOARD,
         )
         return ConversationState.PHQ9
@@ -355,8 +490,12 @@ async def phq9_handler(update: Update, context: CallbackContext) -> Conversation
     session.phq9_answers.append(int(text))
 
     if len(session.phq9_answers) < len(PHQ9_QUESTIONS):
-        next_question = PHQ9_QUESTIONS[len(session.phq9_answers)]
-        await update.message.reply_text(SCALE_INTRO + next_question, reply_markup=SCALE_KEYBOARD)
+        idx = len(session.phq9_answers)
+        next_question = PHQ9_QUESTIONS[idx]
+        await update.message.reply_text(
+            f"{idx+1}️⃣ {next_question}\n(0 — Nunca | 1 — Vários dias | 2 — Mais da metade dos dias | 3 — Quase todos os dias)",
+            reply_markup=SCALE_KEYBOARD
+        )
         return ConversationState.PHQ9
 
     if phq9_item9_flag(session.phq9_answers):
@@ -367,11 +506,11 @@ async def phq9_handler(update: Update, context: CallbackContext) -> Conversation
         )
 
     await update.message.reply_text(
-        "Agora vamos responder 7 perguntas rápidas sobre ansiedade (GAD-7).",
+        "Obrigado. Agora vou fazer 7 perguntas rápidas sobre ansiedade (GAD-7).",
         reply_markup=ReplyKeyboardRemove(),
     )
     await update.message.reply_text(
-        SCALE_INTRO + GAD7_QUESTIONS[0],
+        f"1️⃣ {GAD7_QUESTIONS[0]}\n(0 — Nunca | 1 — Vários dias | 2 — Mais da metade dos dias | 3 — Quase todos os dias)",
         reply_markup=SCALE_KEYBOARD,
     )
     session.gad7_answers.clear()
@@ -386,8 +525,8 @@ async def gad7_handler(update: Update, context: CallbackContext) -> Conversation
         await update.message.reply_text(CRISIS_MESSAGE)
         idx = len(session.gad7_answers)
         await update.message.reply_text(
-            SCALE_INTRO + GAD7_QUESTIONS[idx],
-            reply_markup=SCALE_KEYBOARD,
+            f"{idx+1}️⃣ {GAD7_QUESTIONS[idx]}\n(0 — Nunca | 1 — Vários dias | 2 — Mais da metade dos dias | 3 — Quase todos os dias)",
+            reply_markup=SCALE_KEYBOARD
         )
         return ConversationState.GAD7
     session = _get_session(context, update.effective_user.id)
@@ -395,8 +534,8 @@ async def gad7_handler(update: Update, context: CallbackContext) -> Conversation
     if text not in {"0", "1", "2", "3"}:
         idx = len(session.gad7_answers)
         await update.message.reply_text(
-            "Por favor, responda com 0, 1, 2 ou 3 conforme a escala de frequência.\n\n"
-            + GAD7_QUESTIONS[idx],
+            "Responda apenas com um número entre 0 e 3.\n\n"
+            + f"{idx+1}️⃣ {GAD7_QUESTIONS[idx]}\n(0 — Nunca | 1 — Vários dias | 2 — Mais da metade dos dias | 3 — Quase todos os dias)",
             reply_markup=SCALE_KEYBOARD,
         )
         return ConversationState.GAD7
@@ -404,21 +543,34 @@ async def gad7_handler(update: Update, context: CallbackContext) -> Conversation
     session.gad7_answers.append(int(text))
 
     if len(session.gad7_answers) < len(GAD7_QUESTIONS):
-        next_question = GAD7_QUESTIONS[len(session.gad7_answers)]
-        await update.message.reply_text(SCALE_INTRO + next_question, reply_markup=SCALE_KEYBOARD)
+        idx = len(session.gad7_answers)
+        next_question = GAD7_QUESTIONS[idx]
+        await update.message.reply_text(
+            f"{idx+1}️⃣ {next_question}\n(0 — Nunca | 1 — Vários dias | 2 — Mais da metade dos dias | 3 — Quase todos os dias)",
+            reply_markup=SCALE_KEYBOARD
+        )
         return ConversationState.GAD7
 
     await update.message.reply_text(
-        "Para finalizar, informe seus horários disponíveis (seg–sex, 15h–18h).",
+        "Obrigado por responder. 💙",
         reply_markup=ReplyKeyboardRemove(),
     )
+    # Mensagem institucional de disponibilidade do psicólogo
+    await update.message.reply_text(
+        "O psicólogo atenderá presencialmente de segunda a sexta, das 15h às 18h, e usará sua disponibilidade para marcar a sessão."
+    )
+    await update.message.reply_text("Quais dias e horários dentro desse período você tem disponibilidade?")
     return ConversationState.AGENDAMENTO
 
 
 def _validate_availability(text: str) -> bool:
     lower = text.lower()
-    valid_days = {"segunda", "terça", "terca", "quarta", "quinta", "sexta"}
-    return any(day in lower for day in valid_days) and any(h in lower for h in ["15", "16", "17", "18"])
+    valid_days = {"segunda", "terça", "terca", "quarta", "quinta", "sexta", "seg", "ter", "qua", "qui", "sex"}
+    # Verifica se contém dia útil
+    has_valid_day = any(day in lower for day in valid_days)
+    # Verifica se contém horário entre 15h e 18h (aceita 15, 16, 17, 18, 15h, 16h, 17h, 18h, 15:00, etc)
+    has_valid_hour = any(h in lower for h in ["15", "16", "17", "18"])
+    return has_valid_day and has_valid_hour
 
 
 async def scheduling_handler(update: Update, context: CallbackContext) -> ConversationState:
@@ -432,7 +584,7 @@ async def scheduling_handler(update: Update, context: CallbackContext) -> Conver
     if not session.availability:
         if not _validate_availability(text):
             await update.message.reply_text(
-                "Informe dia(s) e horários entre 15h e 18h, de segunda a sexta.",
+                "Os atendimentos ocorrem de segunda a sexta, das 15h às 18h. Pode me informar um horário dentro desse período?",
             )
             return ConversationState.AGENDAMENTO
         session.availability = text
@@ -445,17 +597,30 @@ async def scheduling_handler(update: Update, context: CallbackContext) -> Conver
 
 
 async def finalize_screening(update: Update, session: SessionData) -> None:
+    logger.info("Iniciando finalização da triagem...")
+    
+    # Envia mensagem de processamento para o usuário
+    processing_msg = None
+    if update.message:
+        processing_msg = await update.message.reply_text("⏳ Processando sua triagem... Isso pode levar alguns segundos.")
+    
     phq9_total = phq9_score(session.phq9_answers)
     gad7_total = gad7_score(session.gad7_answers)
     dados = session.personal_data.copy()
 
-    triage = await triage_summary(
-        dados_pessoais=dados,
-        phq9_respostas=session.phq9_answers,
-        gad7_respostas=session.gad7_answers,
-        texto_livre=session.free_text,
-    )
-    session.triage_result = triage.model_dump()
+    logger.info("Chamando triage_summary...")
+    try:
+        triage = await triage_summary(
+            dados_pessoais=dados,
+            phq9_respostas=session.phq9_answers,
+            gad7_respostas=session.gad7_answers,
+            texto_livre=session.free_text,
+        )
+        session.triage_result = triage.model_dump()
+        logger.info("triage_summary concluído")
+    except Exception as e:
+        logger.error(f"Erro em triage_summary: {e}")
+        session.triage_result = {}
 
     deterministic = build_deterministic_summary(
         nome=dados.get("nome", "Participante"),
@@ -465,23 +630,83 @@ async def finalize_screening(update: Update, session: SessionData) -> None:
         observacao=session.observation,
         free_text=session.free_text,
         triage=session.triage_result,
+        phq9_item9_positive=session.phq9_item9_positive,
     )
 
+    # Prepara contexto mais rico para o relatório da IA
+    from .instruments import phq9_bucket, gad7_bucket
+    from datetime import datetime
+    
+    phq9_nivel = phq9_bucket(phq9_total)
+    gad7_nivel = gad7_bucket(gad7_total)
+    
+    # Determina classificação geral (maior risco)
+    risk_weight = {"Mínima": 0, "Leve": 1, "Moderada": 2, "Moderadamente grave": 3, "Grave": 4}
+    phq9_weight = risk_weight.get(phq9_nivel, 0)
+    gad7_weight = risk_weight.get(gad7_nivel, 0)
+    classificacao_geral = phq9_nivel if phq9_weight >= gad7_weight else gad7_nivel
+    
+    # Determina item mais preocupante
+    top_phq9_score = max(session.phq9_answers) if session.phq9_answers else -1
+    top_gad7_score = max(session.gad7_answers) if session.gad7_answers else -1
+    item_mais_preocupante = ""
+    if top_phq9_score >= top_gad7_score and top_phq9_score > 0:
+        idx = session.phq9_answers.index(top_phq9_score)
+        from .instruments import PHQ9_QUESTIONS
+        item_mais_preocupante = f"PHQ-9 Q{idx + 1}: {PHQ9_QUESTIONS[idx].split(' ', 1)[1] if ' ' in PHQ9_QUESTIONS[idx] else PHQ9_QUESTIONS[idx]} (pontuação {top_phq9_score})"
+    elif top_gad7_score > 0:
+        idx = session.gad7_answers.index(top_gad7_score)
+        from .instruments import GAD7_QUESTIONS
+        item_mais_preocupante = f"GAD-7 Q{idx + 1}: {GAD7_QUESTIONS[idx].split(' ', 1)[1] if ' ' in GAD7_QUESTIONS[idx] else GAD7_QUESTIONS[idx]} (pontuação {top_gad7_score})"
+    
     contexto = {
-        "dados": dados,
+        "nome": dados.get("nome", "Participante"),
+        "matricula": dados.get("matricula", "Não informada"),
+        "data": datetime.now().strftime("%d/%m/%Y %H:%M"),
+        "disponibilidade": session.availability or "Não informada",
         "phq9_score": phq9_total,
+        "phq9_classificacao": phq9_nivel,
         "gad7_score": gad7_total,
-        "disponibilidade": session.availability,
-        "observacao": session.observation,
-        "triage": session.triage_result,
+        "gad7_classificacao": gad7_nivel,
+        "classificacao_geral": classificacao_geral,
+        "phq9_respostas": session.phq9_answers,
+        "gad7_respostas": session.gad7_answers,
+        "item_mais_preocupante": item_mais_preocupante,
+        "item9_positive": session.phq9_item9_positive,
+        "observacao": session.observation or "",
+        "relatos_livres": list(session.free_text)[-6:] if session.free_text else [],
+        "triage": session.triage_result or {},
     }
 
-    llm_text = await gen_report_text(json.dumps(contexto, ensure_ascii=False))
+    logger.info("Chamando gen_report_text...")
+    try:
+        llm_text = await gen_report_text(json.dumps(contexto, ensure_ascii=False))
+        logger.info("gen_report_text concluído")
+    except Exception as e:
+        logger.error(f"Erro em gen_report_text: {e}")
+        llm_text = ""
+    
     final_report = compose_report_text(deterministic, llm_text)
+    
+    # Remove mensagem de processamento
+    if processing_msg:
+        try:
+            await processing_msg.delete()
+        except:
+            pass  # Ignora se não conseguir deletar
 
+    # Converte idade para número se necessário
+    idade_val = dados.get("idade")
+    if isinstance(idade_val, str):
+        try:
+            idade_val = int(idade_val)
+        except:
+            idade_val = 18
+    
     payload = {
         "nome": dados.get("nome"),
-        "idade": dados.get("idade"),
+        "idade": idade_val,
+        "telefone": dados.get("telefone", ""),
         "matricula": dados.get("matricula"),
         "curso": dados.get("curso"),
         "periodo": dados.get("periodo"),
@@ -497,18 +722,67 @@ async def finalize_screening(update: Update, session: SessionData) -> None:
     }
 
     settings = get_settings()
+    logger.info(f"Enviando triagem para: {settings.backend_url}")
+    logger.info(f"Secret configurado: {'Sim' if settings.bot_shared_secret else 'Não'}")
+    logger.debug(f"Payload completo: {json.dumps(payload, ensure_ascii=False, indent=2)}")
+    
+    # Validação básica do payload antes de enviar
+    required_fields = ["nome", "matricula", "curso", "periodo", "phq9_respostas", "gad7_respostas", "relatorio"]
+    missing_fields = [f for f in required_fields if not payload.get(f)]
+    if missing_fields:
+        logger.error(f"Payload incompleto. Campos faltando: {missing_fields}")
+    
     success = send_screening(settings.backend_url, settings.bot_shared_secret, payload)
     if not success:
         logger.error(
             "backend_post_failed",
-            extra={"event": "backend_post_failed", "user_id": session.user_id},
+            extra={
+                "event": "backend_post_failed",
+                "user_id": session.user_id,
+                "url": str(settings.backend_url),
+                "secret_length": len(settings.bot_shared_secret) if settings.bot_shared_secret else 0,
+            },
+        )
+        # Ainda mostra mensagem de sucesso para o usuário, mas loga o erro
+        if update.message:
+            await update.message.reply_text(
+                "⚠️ Aviso: A triagem foi registrada localmente, mas houve um problema ao enviar para o sistema. "
+                "A equipe será notificada. Em caso de emergência, procure ajuda imediatamente (188 ou 192)."
+            )
+        return
+
+    # Prepara mensagem simples de resultados e encerramento
+    if update.message:
+        from .instruments import phq9_bucket, gad7_bucket
+        
+        # Rótulos simples
+        phq9_label = phq9_bucket(phq9_total)
+        gad7_label = gad7_bucket(gad7_total)
+
+        # Classificação geral simples com base no risco maior
+        risk_weight = {"Mínima": 0, "Leve": 1, "Moderada": 2, "Moderadamente grave": 3, "Grave": 4}
+        phq9_weight = risk_weight.get(phq9_label, 0)
+        gad7_weight = risk_weight.get(gad7_label, 0)
+        classificacao_simples = phq9_label if phq9_weight >= gad7_weight else gad7_label
+
+        resultados_msg = (
+            "📊 Resultados da sua Triagem\n\n"
+            f"PHQ-9: {phq9_total} pontos – {phq9_label}\n"
+            f"GAD-7: {gad7_total} pontos – {gad7_label}\n"
+            f"🟢 Classificação geral: {classificacao_simples}"
         )
 
-    if update.message:
-        await update.message.reply_text(
-            "✅ Triagem registrada com sucesso. A equipe entrará em contato em breve. "
-            "Em caso de emergência, procure ajuda imediatamente (188 ou 192)."
+        await update.message.reply_text(resultados_msg)
+
+        mensagem_final = (
+            "Obrigado por confiar em nós e concluir sua triagem.\n"
+            "O psicólogo irá verificar sua disponibilidade e retornará com o agendamento. 💙\n\n"
+            "Em caso de emergência, procure ajuda imediata:\n"
+            "CVV 188 • SAMU 192\n"
+            "Cuide-se 💚."
         )
+        await update.message.reply_text(mensagem_final)
+    
     logger.info("screening_completed", extra={"event": "screening_completed", "user_id": session.user_id})
     session.triage_active = False
 

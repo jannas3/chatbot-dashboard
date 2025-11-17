@@ -28,11 +28,11 @@ VALID_SCALE = {"0", "1", "2", "3"}
 
 
 PHQ9_BUCKETS = {
-    range(0, 5): "Sem sintomas",
-    range(5, 10): "Mínimos",
-    range(10, 15): "Leves",
-    range(15, 20): "Moderados",
-    range(20, 28): "Graves",
+    range(0, 5): "Mínima",  # 0-4: Depressão mínima
+    range(5, 10): "Leve",   # 5-9: Leve
+    range(10, 15): "Moderada",  # 10-14: Moderada
+    range(15, 20): "Moderadamente grave",  # 15-19: Moderadamente grave
+    range(20, 28): "Grave",  # 20-27: Grave
 }
 
 GAD7_BUCKETS = {

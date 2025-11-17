@@ -63,10 +63,17 @@ async def _invoke_json(prompt: str) -> Optional[Dict[str, Any]]:
     if not _json_model:
         return None
     try:
-        response = await asyncio.to_thread(_json_model.generate_content, prompt)
+        # Timeout reduzido para 20 segundos (era 30)
+        response = await asyncio.wait_for(
+            asyncio.to_thread(_json_model.generate_content, prompt),
+            timeout=20.0
+        )
         raw_text = _extract_text(response)
         json_payload = _extract_first_json_block(raw_text)
         return json.loads(json_payload or "{}")
+    except asyncio.TimeoutError:
+        logger.error("Gemini JSON call timeout após 20 segundos")
+        return None
     except Exception as exc:  # pylint: disable=broad-except
         logger.error("Gemini JSON call failed: %s", exc)
         return None
@@ -76,12 +83,19 @@ async def _invoke_text(prompt: str) -> str:
     if not _text_model:
         return ""
     try:
-        response = await asyncio.to_thread(
-            _text_model.generate_content,
-            prompt,
-            generation_config={"response_mime_type": "text/plain"},
+        # Timeout reduzido para 20 segundos (era 30)
+        response = await asyncio.wait_for(
+            asyncio.to_thread(
+                _text_model.generate_content,
+                prompt,
+                generation_config={"response_mime_type": "text/plain"},
+            ),
+            timeout=20.0
         )
         return _extract_text(response).strip()
+    except asyncio.TimeoutError:
+        logger.error("Gemini text call timeout após 20 segundos")
+        return ""
     except Exception as exc:  # pylint: disable=broad-except
         logger.error("Gemini text call failed: %s", exc)
         return ""
@@ -107,13 +121,36 @@ async def triage_summary(
     gad7_respostas: Iterable[int],
     texto_livre: Iterable[str],
 ) -> TriageOut:
+    from .instruments import phq9_score, gad7_score, phq9_bucket, gad7_bucket, phq9_item9_flag
+    
+    # Calcula scores e níveis para dar mais contexto à IA
+    phq9_total = phq9_score(phq9_respostas) if phq9_respostas else 0
+    gad7_total = gad7_score(gad7_respostas) if gad7_respostas else 0
+    phq9_level = phq9_bucket(phq9_total)
+    gad7_level = gad7_bucket(gad7_total)
+    q9_positive = phq9_item9_flag(phq9_respostas) if phq9_respostas and len(list(phq9_respostas)) >= 9 else False
+    
+    # Identifica itens mais preocupantes
+    phq9_list = list(phq9_respostas)
+    gad7_list = list(gad7_respostas)
+    phq9_high_items = [f"Q{i+1}({score})" for i, score in enumerate(phq9_list) if score >= 2]
+    gad7_high_items = [f"Q{i+1}({score})" for i, score in enumerate(gad7_list) if score >= 2]
+    
     prompt = (
         f"{TRIAGE_PROMPT}\n\n"
-        f"DADOS: {dados_pessoais}\n"
-        f"PHQ9: {list(phq9_respostas)}\n"
-        f"GAD7: {list(gad7_respostas)}\n"
-        f"RELATO: {list(texto_livre)[-6:]}\n"
-        "Responda apenas com o JSON especificado."
+        f"DADOS PESSOAIS: {dados_pessoais}\n\n"
+        f"PHQ-9 (Depressão):\n"
+        f"  - Respostas: {phq9_list}\n"
+        f"  - Score total: {phq9_total}/27 ({phq9_level})\n"
+        f"  - Itens com pontuação ≥2: {', '.join(phq9_high_items) if phq9_high_items else 'Nenhum'}\n"
+        f"  - ⚠️ Item 9 (pensamentos de morte/autolesão): {'POSITIVO (≥1) - RISCO CRÍTICO' if q9_positive else 'Negativo'}\n\n"
+        f"GAD-7 (Ansiedade):\n"
+        f"  - Respostas: {gad7_list}\n"
+        f"  - Score total: {gad7_total}/21 ({gad7_level})\n"
+        f"  - Itens com pontuação ≥2: {', '.join(gad7_high_items) if gad7_high_items else 'Nenhum'}\n\n"
+        f"RELATOS LIVRES (últimas 6 mensagens):\n"
+        f"{chr(10).join(f'  - {texto}' for texto in list(texto_livre)[-6:] if texto.strip())}\n\n"
+        f"Responda apenas com o JSON especificado, sendo preciso e baseado nos dados fornecidos."
     )
     payload = await _invoke_json(prompt)
     default = TriageOut()
@@ -125,14 +162,19 @@ async def triage_summary(
 async def gen_report_text(contexto: str) -> str:
     prompt = (
         f"{RELATORIO_PROMPT}\n\n"
-        f"Contexto estruturado:\n{contexto}\n"
-        "Produza apenas o texto solicitado, sem JSON."
+        f"DADOS DA TRIAGEM (JSON):\n{contexto}\n\n"
+        "IMPORTANTE: Substitua todos os {{placeholders}} pelos valores reais dos dados fornecidos acima. "
+        "Gere o relatório completo seguindo EXATAMENTE a estrutura especificada, preenchendo todas as seções. "
+        "Use os dados do JSON para extrair nome, matrícula, scores, classificações, etc. "
+        "Produza apenas o texto do relatório formatado, sem JSON."
     )
     text = await _invoke_text(prompt)
     if not text:
         return (
+            "📌 RELATÓRIO DE TRIAGEM — PSICOFLOW\n\n"
             "Triagem registrada. Recomenda-se buscar apoio profissional. "
             "A equipe fará contato o quanto antes."
         )
-    return text[:1200]
+    # Aumenta limite para relatório completo (até 3000 caracteres)
+    return text[:3000]
 
