@@ -1,0 +1,70 @@
+{
+  "timestamp": "2025-12-03T21:10:43.640581",
+  "summary": {
+    "total_triagens": 20,
+    "triagens_completas": 20,
+    "estudantes_cadastrados_atualizados": 20,
+    "relatorios_gerados_armazenados": 20,
+    "analises_integradas_ia": 20,
+    "taxa_sucesso": 100.0
+  },
+  "performance_metrics": {
+    "tempo_interacao_estudante": {
+      "min_minutos": 7.478148990897575,
+      "max_minutos": 9.994586874832532,
+      "media_minutos": 8.7448309798286,
+      "range": "7.5 - 10.0 minutos"
+    },
+    "tempo_backend": {
+      "min_segundos": 0.020154237747192383,
+      "max_segundos": 0.5710813999176025,
+      "media_segundos": 0.07339199781417846,
+      "range": "0.020 - 0.571 segundos"
+    },
+    "tempo_ia_analise_emocional": {
+      "min_segundos": 3.752774715423584,
+      "max_segundos": 13.899754762649536,
+      "media_segundos": 8.490904426574707,
+      "range": "3.8 - 13.9 segundos"
+    },
+    "tempo_ia_geracao_relatorio": {
+      "min_segundos": 7.150524616241455,
+      "max_segundos": 14.655675888061523,
+      "media_segundos": 10.74145141839981,
+      "range": "7.2 - 14.7 segundos"
+    },
+    "tempo_total_processamento": {
+      "min_segundos": 12.193746328353882,
+      "max_segundos": 24.695501804351807,
+      "media_segundos": 19.305747842788698,
+      "range": "12.2 - 24.7 segundos"
+    },
+    "analise_emocional_tempo_real": {
+      "min_segundos": 2.135767698287964,
+      "max_segundos": 20.025180101394653,
+      "media_segundos": 7.664221519231797,
+      "range": "2.1 - 20.0 segundos"
+    }
+  },
+  "detailed_results": [
+    {
+      "case_id": 1,
+      "timestamp": "2025-12-03T20:59:10.933351",
+      "metrics": {
+        "user_interaction": {
+          "time_seconds": 448.68893945385446,
+          "time_minutes": 7.48
+        },
+        "realtime_analysis": {
+          "times_seconds": [
+            7.967201471328735,
+            7.467978477478027
+          ],
+          "avg_seconds": 7.717589974403381,
+          "min_seconds": 7.467978477478027,
+          "max_seconds": 7.967201471328735
+        },
+        "emotional_analysis": {
+          "success": true,
+          "time_seconds": 3.752774715423584,
+          "result": 

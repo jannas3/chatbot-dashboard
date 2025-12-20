@@ -9,6 +9,15 @@ logger = logging.getLogger(__name__)
 
 
 def send_screening(url: str, shared_secret: str, payload: Mapping[str, Any]) -> bool:
+    # Print de debug para rastreamento
+    print("="*60)
+    print("📤 SEND_SCREENING CHAMADO!")
+    print(f"   URL: {url}")
+    print(f"   Secret: {shared_secret[:4] if shared_secret else 'N/A'}...")
+    print(f"   Nome: {payload.get('nome', 'N/A')}")
+    print(f"   Matrícula: {payload.get('matricula', 'N/A')}")
+    print("="*60)
+    
     try:
         logger.debug("sending_payload", extra={"event": "backend_payload", "payload": payload})
         logger.info(f"Enviando para: {url}")
@@ -56,9 +65,19 @@ def send_screening(url: str, shared_secret: str, payload: Mapping[str, Any]) -> 
                 )
         else:
             logger.info("✅ Triagem enviada com sucesso para o backend")
+            print("="*60)
+            print("✅ TRIAGEM ENVIADA COM SUCESSO!")
+            print(f"   Status: {response.status_code}")
+            print(f"   Nome: {payload.get('nome', 'N/A')}")
+            print("="*60)
         
         return response.ok
     except requests.exceptions.ConnectionError as exc:
+        print("="*60)
+        print("❌ ERRO DE CONEXÃO!")
+        print(f"   URL: {url}")
+        print(f"   Detalhes: {exc}")
+        print("="*60)
         logger.error(f"❌ ERRO DE CONEXÃO: Não foi possível conectar ao backend em {url}")
         logger.error(f"   Detalhes: {exc}")
         logger.error(
@@ -67,6 +86,10 @@ def send_screening(url: str, shared_secret: str, payload: Mapping[str, Any]) -> 
         )
         return False
     except requests.exceptions.Timeout as exc:
+        print("="*60)
+        print("❌ TIMEOUT!")
+        print(f"   URL: {url}")
+        print("="*60)
         logger.error(f"❌ TIMEOUT: O backend demorou mais de 6 segundos para responder")
         logger.error(f"   URL: {url}")
         logger.error(
@@ -75,6 +98,11 @@ def send_screening(url: str, shared_secret: str, payload: Mapping[str, Any]) -> 
         )
         return False
     except requests.RequestException as exc:
+        print("="*60)
+        print("❌ ERRO NA REQUISIÇÃO!")
+        print(f"   URL: {url}")
+        print(f"   Erro: {exc}")
+        print("="*60)
         logger.error(f"❌ ERRO NA REQUISIÇÃO: {exc}")
         logger.error(f"   URL: {url}")
         logger.error(

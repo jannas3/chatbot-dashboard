@@ -27,11 +27,14 @@ class Settings(BaseModel):
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
     try:
+        # Aceita tanto BACKEND_URL quanto API_URL (para compatibilidade)
+        backend_url = os.getenv("BACKEND_URL") or os.getenv("API_URL") or "http://localhost:4000/api/screenings"
+        
         return Settings(
             telegram_token=os.getenv("TELEGRAM_TOKEN", ""),
             gemini_api_key=os.getenv("GEMINI_API_KEY"),
             bot_shared_secret=os.getenv("BOT_SHARED_SECRET", "dev_secret"),
-            backend_url=os.getenv("BACKEND_URL", "http://localhost:4000/api/screenings"),
+            backend_url=backend_url,
         )
     except ValidationError as exc:
         logging.getLogger(__name__).error("config validation error: %s", exc)

@@ -275,6 +275,10 @@ async def collect_personal_data(update: Update, context: CallbackContext) -> Con
         return ConversationHandler.END
     session = _get_session(context, update.effective_user.id)
     text = (update.message.text or "").strip()
+    # Debug: mostra qual campo está sendo processado
+    field = session.next_personal_field()
+    if field:
+        print(f"   📝 Processando campo: {field[0]}")
     if crisis_gate(text, False):
         await update.message.reply_text(CRISIS_MESSAGE)
     field = session.next_personal_field()
@@ -560,6 +564,7 @@ async def gad7_handler(update: Update, context: CallbackContext) -> Conversation
         "O psicólogo atenderá presencialmente de segunda a sexta, das 15h às 18h, e usará sua disponibilidade para marcar a sessão."
     )
     await update.message.reply_text("Quais dias e horários dentro desse período você tem disponibilidade?")
+    print("   📅 Mudando para estado AGENDAMENTO")
     return ConversationState.AGENDAMENTO
 
 
@@ -574,35 +579,69 @@ def _validate_availability(text: str) -> bool:
 
 
 async def scheduling_handler(update: Update, context: CallbackContext) -> ConversationState:
+    # Print de debug para rastreamento
+    print("="*60)
+    print("📅 SCHEDULING_HANDLER CHAMADO!")
+    if update.effective_user:
+        print(f"   User ID: {update.effective_user.id}")
+    print("="*60)
+    
     if not update.message or not update.effective_user:
+        print("⚠️  SCHEDULING_HANDLER: Sem mensagem ou usuário")
         return ConversationHandler.END
+    
     session = _get_session(context, update.effective_user.id)
     text = (update.message.text or "").strip()
+    
+    print(f"   Texto recebido: {text[:50]}")
+    print(f"   Disponibilidade atual: {session.availability[:50] if session.availability else 'N/A'}")
+    print(f"   Observação atual: {session.observation[:50] if session.observation else 'N/A'}")
+    
     if crisis_gate(text, False):
         await update.message.reply_text(CRISIS_MESSAGE)
 
     if not session.availability:
+        print("   📝 Processando disponibilidade...")
         if not _validate_availability(text):
             await update.message.reply_text(
                 "Os atendimentos ocorrem de segunda a sexta, das 15h às 18h. Pode me informar um horário dentro desse período?",
             )
             return ConversationState.AGENDAMENTO
         session.availability = text
+        print(f"   ✅ Disponibilidade salva: {session.availability}")
         await update.message.reply_text("Deseja adicionar alguma observação? (ou digite 'Nenhuma')")
         return ConversationState.AGENDAMENTO
 
+    print("   📝 Processando observação (isso deve chamar finalize_screening)...")
     session.observation = "" if text.lower() == "nenhuma" else text
+    print(f"   ✅ Observação salva: {session.observation[:50] if session.observation else 'Nenhuma'}")
+    print("   🚀 Chamando finalize_screening...")
     await finalize_screening(update, session)
+    print("   ✅ finalize_screening concluído")
     return ConversationHandler.END
 
 
 async def finalize_screening(update: Update, session: SessionData) -> None:
+    # Print de debug para rastreamento
+    print("="*60)
+    print("🚀 FINALIZE_SCREENING CHAMADO!")
+    print(f"   User ID: {session.user_id}")
+    print(f"   Nome: {session.personal_data.get('nome', 'N/A')}")
+    print(f"   PHQ-9: {len(session.phq9_answers)} respostas")
+    print(f"   GAD-7: {len(session.gad7_answers)} respostas")
+    print("="*60)
+    
     logger.info("Iniciando finalização da triagem...")
+    logger.info(f"User ID: {session.user_id}, Nome: {session.personal_data.get('nome', 'N/A')}")
     
     # Envia mensagem de processamento para o usuário
     processing_msg = None
     if update.message:
-        processing_msg = await update.message.reply_text("⏳ Processando sua triagem... Isso pode levar alguns segundos.")
+        try:
+            processing_msg = await update.message.reply_text("⏳ Processando sua triagem... Isso pode levar alguns segundos.")
+        except Exception as e:
+            logger.warning(f"Erro ao enviar mensagem de processamento (ignorado): {e}")
+            processing_msg = None
     
     phq9_total = phq9_score(session.phq9_answers)
     gad7_total = gad7_score(session.gad7_answers)
@@ -692,7 +731,8 @@ async def finalize_screening(update: Update, session: SessionData) -> None:
     if processing_msg:
         try:
             await processing_msg.delete()
-        except:
+        except Exception as e:
+            logger.debug(f"Erro ao deletar mensagem de processamento (ignorado): {e}")
             pass  # Ignora se não conseguir deletar
 
     # Converte idade para número se necessário
@@ -753,35 +793,39 @@ async def finalize_screening(update: Update, session: SessionData) -> None:
 
     # Prepara mensagem simples de resultados e encerramento
     if update.message:
-        from .instruments import phq9_bucket, gad7_bucket
-        
-        # Rótulos simples
-        phq9_label = phq9_bucket(phq9_total)
-        gad7_label = gad7_bucket(gad7_total)
+        try:
+            from .instruments import phq9_bucket, gad7_bucket
+            
+            # Rótulos simples
+            phq9_label = phq9_bucket(phq9_total)
+            gad7_label = gad7_bucket(gad7_total)
 
-        # Classificação geral simples com base no risco maior
-        risk_weight = {"Mínima": 0, "Leve": 1, "Moderada": 2, "Moderadamente grave": 3, "Grave": 4}
-        phq9_weight = risk_weight.get(phq9_label, 0)
-        gad7_weight = risk_weight.get(gad7_label, 0)
-        classificacao_simples = phq9_label if phq9_weight >= gad7_weight else gad7_label
+            # Classificação geral simples com base no risco maior
+            risk_weight = {"Mínima": 0, "Leve": 1, "Moderada": 2, "Moderadamente grave": 3, "Grave": 4}
+            phq9_weight = risk_weight.get(phq9_label, 0)
+            gad7_weight = risk_weight.get(gad7_label, 0)
+            classificacao_simples = phq9_label if phq9_weight >= gad7_weight else gad7_label
 
-        resultados_msg = (
-            "📊 Resultados da sua Triagem\n\n"
-            f"PHQ-9: {phq9_total} pontos – {phq9_label}\n"
-            f"GAD-7: {gad7_total} pontos – {gad7_label}\n"
-            f"🟢 Classificação geral: {classificacao_simples}"
-        )
+            resultados_msg = (
+                "📊 Resultados da sua Triagem\n\n"
+                f"PHQ-9: {phq9_total} pontos – {phq9_label}\n"
+                f"GAD-7: {gad7_total} pontos – {gad7_label}\n"
+                f"🟢 Classificação geral: {classificacao_simples}"
+            )
 
-        await update.message.reply_text(resultados_msg)
+            await update.message.reply_text(resultados_msg)
 
-        mensagem_final = (
-            "Obrigado por confiar em nós e concluir sua triagem.\n"
-            "O psicólogo irá verificar sua disponibilidade e retornará com o agendamento. 💙\n\n"
-            "Em caso de emergência, procure ajuda imediata:\n"
-            "CVV 188 • SAMU 192\n"
-            "Cuide-se 💚."
-        )
-        await update.message.reply_text(mensagem_final)
+            mensagem_final = (
+                "Obrigado por confiar em nós e concluir sua triagem.\n"
+                "O psicólogo irá verificar sua disponibilidade e retornará com o agendamento. 💙\n\n"
+                "Em caso de emergência, procure ajuda imediata:\n"
+                "CVV 188 • SAMU 192\n"
+                "Cuide-se 💚."
+            )
+            await update.message.reply_text(mensagem_final)
+        except Exception as e:
+            logger.warning(f"Erro ao enviar mensagens finais (ignorado): {e}")
+            # Não interrompe o fluxo - o importante é que o backend recebeu
     
     logger.info("screening_completed", extra={"event": "screening_completed", "user_id": session.user_id})
     session.triage_active = False
